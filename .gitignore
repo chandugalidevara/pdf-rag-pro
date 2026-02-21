@@ -1,5 +1,31 @@
+# Environment variables - NEVER commit API keys!
 .env
-venv/
+
+# Chroma database folder (vector store)
+chroma_db/
+chroma_db/*
+
+# Python cache
 __pycache__/
 *.pyc
-chroma_db/
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+ENV/
+env/
+
+# Streamlit secrets (if you use them later)
+.streamlit/secrets.toml
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.temp
