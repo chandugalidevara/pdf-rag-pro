@@ -3,8 +3,6 @@ import os
 import tempfile
 import shutil
 from datetime import datetime
-from dotenv import load_dotenv
-import json
 
 from langchain_community.document_loaders import PyMuPDFLoader
 from llama_parse import LlamaParse
@@ -23,10 +21,9 @@ from fpdf import FPDF
 st.set_page_config(page_title="PDF RAG Pro", layout="wide", page_icon="📄")
 
 st.title("📄 PDF RAG Pro - Near-Zero Hallucination")
-st.caption("FlashRank + LlamaParse + Enhanced Features")
+st.caption("Upload PDFs below and click Process")
 
-load_dotenv(override=True)
-
+# Keys from secrets
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 LLAMA_CLOUD_API_KEY = st.secrets.get("LLAMA_CLOUD_API_KEY")
 
@@ -34,53 +31,61 @@ if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "theme" not in st.session_state:
-    st.session_state.theme = "dark"
 
-# Theme Toggle
-if st.button("🌙 Toggle Dark/Light Mode"):
-    st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
+# === MAIN UPLOAD AREA (Always Visible) ===
+st.subheader("📤 Upload PDFs")
+uploaded_files = st.file_uploader("Choose PDF files", type=["pdf"], accept_multiple_files=True)
 
-if st.session_state.theme == "light":
-    st.markdown("""
-    <style>
-        .stApp { background-color: #ffffff; color: #000000; }
-    </style>
-    """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-    <style>
-        .stApp { background-color: #0e1117; color: #ffffff; }
-    </style>
-    """, unsafe_allow_html=True)
+use_llamaparse = st.checkbox("Use LlamaParse (best for scanned/image PDFs & tables)", value=True)
 
-# Voice Input (Browser-based)
-if st.button("🎤 Speak Question"):
-    st.write("Voice input is coming soon! For now, please type your question.")
+if st.button("🚀 Process PDFs & Build Index", type="primary"):
+    if not uploaded_files:
+        st.error("Please upload at least one PDF")
+        st.stop()
 
-# Save / Load Chat History
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("💾 Save Chat"):
-        with open("chat_history.json", "w") as f:
-            json.dump(st.session_state.messages, f)
-        st.success("Chat saved!")
+    if os.path.exists("./chroma_db"):
+        shutil.rmtree("./chroma_db", ignore_errors=True)
+    st.session_state.vectorstore = None
+    st.session_state.messages = []
 
-with col2:
-    if st.button("📂 Load Previous Chat"):
-        if os.path.exists("chat_history.json"):
-            with open("chat_history.json", "r") as f:
-                st.session_state.messages = json.load(f)
-            st.success("Chat loaded!")
+    with st.spinner("Processing PDFs..."):
+        all_docs = []
+        for uploaded_file in uploaded_files:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(uploaded_file.read())
+                tmp_path = tmp.name
 
-# Rest of the app (stable version)
+            if use_llamaparse and LLAMA_CLOUD_API_KEY:
+                loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
+                llama_docs = loader.load_data(tmp_path)
+                for d in llama_docs:
+                    page_num = d.metadata.get("page_label") or 1
+                    doc = Document(page_content=d.text, metadata={"source": uploaded_file.name, "page": page_num})
+                    all_docs.append(doc)
+            else:
+                loader = PyMuPDFLoader(tmp_path)
+                docs = loader.load()
+                for doc in docs:
+                    doc.metadata["source"] = uploaded_file.name
+                    doc.metadata["page"] = doc.metadata.get("page", 0) + 1
+                all_docs.extend(docs)
+
+            os.unlink(tmp_path)
+
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
+        splits = text_splitter.split_documents(all_docs)
+        splits = [s for s in splits if len(s.page_content.strip()) > 30]
+
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        st.session_state.vectorstore = Chroma.from_documents(
+            documents=splits, embedding=embeddings, persist_directory="./chroma_db"
+        )
+        st.success(f"✅ {len(splits)} chunks indexed from {len(uploaded_files)} PDFs")
+
+# Main Chat Area
 if st.session_state.vectorstore is None:
-    st.info("👈 Upload PDFs → click Process")
+    st.info("Upload PDFs above and click Process to start asking questions")
 else:
-    base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 8})
-    compressor = FlashrankRerank(top_n=4)
-    compression_retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
-
     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.0, api_key=GROQ_API_KEY)
 
     system_prompt = """Answer ONLY using the provided context. 
@@ -94,6 +99,10 @@ Always cite sources as [Source: filename - Page X]."""
 
     def format_docs(docs):
         return "\n\n---\n\n".join([f"Source: {d.metadata['source']} - Page {d.metadata.get('page', '?')}\n{d.page_content}" for d in docs])
+
+    base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 6})
+    compressor = FlashrankRerank(top_n=4)
+    compression_retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
 
     rag_chain = (
         {"context": compression_retriever | format_docs, "question": RunnablePassthrough()}
@@ -143,4 +152,4 @@ Always cite sources as [Source: filename - Page X]."""
                 mime="application/pdf"
             )
 
-st.caption("Enhanced Version with Dark/Light Mode + Voice + History")
+st.caption("Simple & Visible Upload Version")
