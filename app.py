@@ -3,7 +3,6 @@ import os
 import tempfile
 import shutil
 from datetime import datetime
-from dotenv import load_dotenv
 
 from langchain_community.document_loaders import PyMuPDFLoader
 from llama_parse import LlamaParse
@@ -22,16 +21,10 @@ from fpdf import FPDF
 st.set_page_config(page_title="PDF RAG Pro", layout="wide", page_icon="📄")
 
 st.title("📄 PDF RAG Pro - Near-Zero Hallucination")
-st.caption("Optimized for Tables + FlashRank + LlamaParse")
-
-load_dotenv(override=True)
+st.caption("Stable for Tables & Scanned PDFs")
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 LLAMA_CLOUD_API_KEY = st.secrets.get("LLAMA_CLOUD_API_KEY")
-
-if not GROQ_API_KEY or GROQ_API_KEY.startswith("gsk_PASTE"):
-    st.error("Please update your Groq API key in Secrets")
-    st.stop()
 
 if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = None
@@ -40,7 +33,7 @@ if "messages" not in st.session_state:
 
 with st.sidebar:
     st.header("⚙️ Settings")
-    use_llamaparse = st.checkbox("Use LlamaParse (Recommended for tables & scanned PDFs)", value=True)
+    use_llamaparse = st.checkbox("Use LlamaParse (Best for tables & scanned PDFs)", value=True)
     
     uploaded_files = st.file_uploader("Upload PDFs", type=["pdf"], accept_multiple_files=True)
 
@@ -49,12 +42,13 @@ with st.sidebar:
             st.error("Upload at least one PDF")
             st.stop()
 
+        # Safe reset
         if os.path.exists("./chroma_db"):
             shutil.rmtree("./chroma_db", ignore_errors=True)
         st.session_state.vectorstore = None
         st.session_state.messages = []
 
-        with st.spinner("Processing PDFs (optimizing for tables)..."):
+        with st.spinner("Processing PDFs (optimized for tables)..."):
             all_docs = []
             for uploaded_file in uploaded_files:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -63,19 +57,15 @@ with st.sidebar:
 
                 if use_llamaparse and LLAMA_CLOUD_API_KEY:
                     loader = LlamaParse(
-                        api_key=LLAMA_CLOUD_API_KEY,
+                        api_key=LLAMA_CLOUD_API_KEY, 
                         result_type="markdown",
-                        parsing_instruction="""Extract all text and tables accurately. 
-                        Convert every table into clean Markdown table format. 
-                        Preserve table structure, headers, and all rows exactly."""
+                        parsing_instruction="Extract all tables as clean markdown tables. Keep all numbers, headers, and data exactly. Do not summarize tables."
                     )
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
+                        text = d.text[:3500]  # ← CRITICAL LIMIT for Streamlit Cloud
                         page_num = d.metadata.get("page_label") or d.metadata.get("page") or 1
-                        doc = Document(
-                            page_content=d.text,
-                            metadata={"source": uploaded_file.name, "page": page_num}
-                        )
+                        doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": page_num})
                         all_docs.append(doc)
                 else:
                     loader = PyMuPDFLoader(tmp_path)
@@ -87,15 +77,17 @@ with st.sidebar:
 
                 os.unlink(tmp_path)
 
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)
             splits = text_splitter.split_documents(all_docs)
             splits = [s for s in splits if len(s.page_content.strip()) > 30]
 
             embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
             st.session_state.vectorstore = Chroma.from_documents(
-                documents=splits, embedding=embeddings, persist_directory="./chroma_db"
+                documents=splits, 
+                embedding=embeddings, 
+                persist_directory="./chroma_db"
             )
-            st.success(f"✅ {len(splits)} chunks indexed (tables optimized)")
+            st.success(f"✅ {len(splits)} chunks indexed")
 
     if st.button("🔄 Clear Index"):
         if os.path.exists("./chroma_db"):
@@ -105,7 +97,7 @@ with st.sidebar:
         st.success("Everything cleared")
 
 if st.session_state.vectorstore is None:
-    st.info("👈 Upload PDFs → click Process (use LlamaParse for tables)")
+    st.info("👈 Upload PDFs → click Process")
 else:
     base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 8})
     compressor = FlashrankRerank(top_n=4)
@@ -113,9 +105,8 @@ else:
 
     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.0, api_key=GROQ_API_KEY)
 
-    system_prompt = """You are an expert at answering questions from documents.
-Answer ONLY using the provided context.
-If the question is about a table, reproduce the full table in clean Markdown format.
+    system_prompt = """Answer ONLY using the provided context. 
+If the question is about a table, extract and show the table in clean markdown format.
 Always cite sources as [Source: filename - Page X]."""
 
     prompt_template = ChatPromptTemplate.from_messages([
@@ -174,4 +165,4 @@ Always cite sources as [Source: filename - Page X]."""
                 mime="application/pdf"
             )
 
-st.caption("Final Version | Tables Now Work Properly")
+st.caption("Stable Version for Tables & Scanned PDFs")
