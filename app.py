@@ -18,20 +18,17 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.documents import Document
 from fpdf import FPDF
+import uuid
 
 st.set_page_config(page_title="PDF RAG Pro", layout="wide", page_icon="📄")
 
 st.title("📄 PDF RAG Pro - Near-Zero Hallucination")
-st.caption("FlashRank Reranker + LlamaParse + Accurate Page Numbers")
+st.caption("Stable Version | Accurate Citations")
 
 load_dotenv(override=True)
 
-GROQ_API_KEY = "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"   # ← Your Groq key
-LLAMA_CLOUD_API_KEY = "llx-cWhSAtPyFPCYRZlFJCUBY5wKYpB8XucNDZnaErtnxXKAmr26"               # ← Your LlamaParse key
-
-if not GROQ_API_KEY or GROQ_API_KEY.startswith("gsk_PASTE"):
-    st.error("Please update your Groq API key")
-    st.stop()
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+LLAMA_CLOUD_API_KEY = st.secrets.get("LLAMA_CLOUD_API_KEY")
 
 if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = None
@@ -50,10 +47,7 @@ with st.sidebar:
             st.stop()
 
         if os.path.exists("./chroma_db"):
-            try:
-                shutil.rmtree("./chroma_db", ignore_errors=True)
-            except:
-                pass
+            shutil.rmtree("./chroma_db", ignore_errors=True)
         st.session_state.vectorstore = None
         st.session_state.messages = []
 
@@ -68,10 +62,10 @@ with st.sidebar:
                     loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
-                        # Accurate page number for LlamaParse
-                        page_num = d.metadata.get("page_label") or d.metadata.get("page") or d.metadata.get("page_number") or "1"
+                        text = d.text[:6000]  # Limit length to prevent Chroma crash
+                        page_num = d.metadata.get("page_label") or d.metadata.get("page") or 1
                         doc = Document(
-                            page_content=d.text,
+                            page_content=text,
                             metadata={"source": uploaded_file.name, "page": page_num}
                         )
                         all_docs.append(doc)
@@ -79,29 +73,28 @@ with st.sidebar:
                     loader = PyMuPDFLoader(tmp_path)
                     docs = loader.load()
                     for doc in docs:
-                        page_num = doc.metadata.get("page", 0) + 1
                         doc.metadata["source"] = uploaded_file.name
-                        doc.metadata["page"] = page_num
+                        doc.metadata["page"] = doc.metadata.get("page", 0) + 1
                     all_docs.extend(docs)
 
                 os.unlink(tmp_path)
 
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=900, chunk_overlap=180)
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=100)
             splits = text_splitter.split_documents(all_docs)
             splits = [s for s in splits if len(s.page_content.strip()) > 30]
 
             embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
             st.session_state.vectorstore = Chroma.from_documents(
-                documents=splits, embedding=embeddings, persist_directory="./chroma_db"
+                documents=splits,
+                embedding=embeddings,
+                persist_directory="./chroma_db",
+                collection_name="pdf_rag"
             )
             st.success(f"✅ {len(splits)} chunks indexed from {len(uploaded_files)} PDFs")
 
     if st.button("🔄 Clear Index"):
         if os.path.exists("./chroma_db"):
-            try:
-                shutil.rmtree("./chroma_db", ignore_errors=True)
-            except:
-                pass
+            shutil.rmtree("./chroma_db", ignore_errors=True)
         st.session_state.vectorstore = None
         st.session_state.messages = []
         st.success("Everything cleared")
@@ -109,7 +102,7 @@ with st.sidebar:
 if st.session_state.vectorstore is None:
     st.info("👈 Upload PDFs → click Process")
 else:
-    base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 8})
+    base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 6})
     compressor = FlashrankRerank(top_n=4)
     compression_retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
 
@@ -151,14 +144,8 @@ Always cite sources as [Source: filename - Page X]."""
                 with st.expander("📚 Sources & Citations", expanded=True):
                     retrieved = compression_retriever.invoke(question)
                     for i, d in enumerate(retrieved):
-                        source = d.metadata.get('source', 'Unknown')
-                        page = d.metadata.get('page', '?')
-                        snippet = d.page_content.strip()[:480]
-                        if len(d.page_content) > 480:
-                            snippet += "..."
-                        snippet = snippet.replace('\n', ' ').replace('\r', ' ')
-                        st.markdown(f"**[{i+1}] {source} - Page {page}**")
-                        st.caption(snippet)
+                        st.markdown(f"**[{i+1}] {d.metadata.get('source', 'Unknown')} - Page {d.metadata.get('page', '?')}**")
+                        st.caption(d.page_content[:480] + "...")
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
 
@@ -181,4 +168,4 @@ Always cite sources as [Source: filename - Page X]."""
                 mime="application/pdf"
             )
 
-st.caption("Final Version | Accurate Page Numbers Fixed")
+st.caption("Stable Streamlit Cloud Version | Accurate Page Numbers")
