@@ -17,13 +17,25 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.documents import Document
 from fpdf import FPDF
+import json
 
 st.set_page_config(page_title="PDF RAG Pro", layout="wide", page_icon="📄")
 
-st.title("📄 PDF RAG Pro - Near-Zero Hallucination")
-st.caption("Upload PDFs below and click Process")
+# Theme
+if "theme" not in st.session_state:
+    st.session_state.theme = "dark"
 
-# Keys from secrets
+if st.button("🌙 Toggle Dark/Light Mode"):
+    st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
+
+if st.session_state.theme == "light":
+    st.markdown("<style>.stApp {background-color: #ffffff; color: #000000;}</style>", unsafe_allow_html=True)
+else:
+    st.markdown("<style>.stApp {background-color: #0e1117; color: #ffffff;}</style>", unsafe_allow_html=True)
+
+st.title("📄 PDF RAG Pro - Near-Zero Hallucination")
+st.caption("FlashRank Reranker + LlamaParse + Tables + Dark Mode + Chat History")
+
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 LLAMA_CLOUD_API_KEY = st.secrets.get("LLAMA_CLOUD_API_KEY")
 
@@ -32,64 +44,84 @@ if "vectorstore" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# === MAIN UPLOAD AREA (Always Visible) ===
+# Visible Upload Section
 st.subheader("📤 Upload PDFs")
-uploaded_files = st.file_uploader("Choose PDF files", type=["pdf"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("Drag & drop or browse PDFs (multiple allowed)", type=["pdf"], accept_multiple_files=True)
 
-use_llamaparse = st.checkbox("Use LlamaParse (best for scanned/image PDFs & tables)", value=True)
+use_llamaparse = st.checkbox("Use LlamaParse (recommended for scanned PDFs & tables)", value=True)
 
-if st.button("🚀 Process PDFs & Build Index", type="primary"):
-    if not uploaded_files:
-        st.error("Please upload at least one PDF")
-        st.stop()
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("🚀 Process / Replace Index", type="primary"):
+        if not uploaded_files:
+            st.error("Upload at least one PDF")
+            st.stop()
 
-    if os.path.exists("./chroma_db"):
-        shutil.rmtree("./chroma_db", ignore_errors=True)
-    st.session_state.vectorstore = None
-    st.session_state.messages = []
+        # Full safe reset
+        if os.path.exists("./chroma_db"):
+            shutil.rmtree("./chroma_db", ignore_errors=True)
+        st.session_state.vectorstore = None
+        st.session_state.messages = []
 
-    with st.spinner("Processing PDFs..."):
-        all_docs = []
-        for uploaded_file in uploaded_files:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(uploaded_file.read())
-                tmp_path = tmp.name
+        with st.spinner("Processing PDFs (optimized for tables)..."):
+            all_docs = []
+            for uploaded_file in uploaded_files:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    tmp.write(uploaded_file.read())
+                    tmp_path = tmp.name
 
-            if use_llamaparse and LLAMA_CLOUD_API_KEY:
-                loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
-                llama_docs = loader.load_data(tmp_path)
-                for d in llama_docs:
-                    page_num = d.metadata.get("page_label") or 1
-                    doc = Document(page_content=d.text, metadata={"source": uploaded_file.name, "page": page_num})
-                    all_docs.append(doc)
-            else:
-                loader = PyMuPDFLoader(tmp_path)
-                docs = loader.load()
-                for doc in docs:
-                    doc.metadata["source"] = uploaded_file.name
-                    doc.metadata["page"] = doc.metadata.get("page", 0) + 1
-                all_docs.extend(docs)
+                if use_llamaparse and LLAMA_CLOUD_API_KEY:
+                    loader = LlamaParse(
+                        api_key=LLAMA_CLOUD_API_KEY,
+                        result_type="markdown",
+                        parsing_instruction="Extract all tables as clean markdown tables. Keep all numbers, headers, and data exactly as in the original PDF. Do not summarize tables."
+                    )
+                    llama_docs = loader.load_data(tmp_path)
+                    for d in llama_docs:
+                        text = d.text[:4500]
+                        page_num = d.metadata.get("page_label") or d.metadata.get("page") or 1
+                        doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": page_num})
+                        all_docs.append(doc)
+                else:
+                    loader = PyMuPDFLoader(tmp_path)
+                    docs = loader.load()
+                    for doc in docs:
+                        doc.metadata["source"] = uploaded_file.name
+                        doc.metadata["page"] = doc.metadata.get("page", 0) + 1
+                    all_docs.extend(docs)
 
-            os.unlink(tmp_path)
+                os.unlink(tmp_path)
 
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
-        splits = text_splitter.split_documents(all_docs)
-        splits = [s for s in splits if len(s.page_content.strip()) > 30]
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=100)
+            splits = text_splitter.split_documents(all_docs)
+            splits = [s for s in splits if len(s.page_content.strip()) > 30]
 
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-        st.session_state.vectorstore = Chroma.from_documents(
-            documents=splits, embedding=embeddings, persist_directory="./chroma_db"
-        )
-        st.success(f"✅ {len(splits)} chunks indexed from {len(uploaded_files)} PDFs")
+            embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            st.session_state.vectorstore = Chroma.from_documents(
+                documents=splits, embedding=embeddings, persist_directory="./chroma_db"
+            )
+            st.success(f"✅ {len(splits)} chunks indexed from {len(uploaded_files)} PDFs")
 
-# Main Chat Area
+with col2:
+    if st.button("🔄 Clear All Index"):
+        if os.path.exists("./chroma_db"):
+            shutil.rmtree("./chroma_db", ignore_errors=True)
+        st.session_state.vectorstore = None
+        st.session_state.messages = []
+        st.success("All documents cleared")
+
+# Main Chat
 if st.session_state.vectorstore is None:
-    st.info("Upload PDFs above and click Process to start asking questions")
+    st.info("👈 Upload PDFs and click 'Process / Replace Index' to start")
 else:
+    base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 8})
+    compressor = FlashrankRerank(top_n=4)
+    compression_retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
+
     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.0, api_key=GROQ_API_KEY)
 
     system_prompt = """Answer ONLY using the provided context. 
-If the answer is not in the context, reply exactly: "I don't have sufficient information in the provided documents."
+If the question is about a table, extract and show the table in clean markdown format.
 Always cite sources as [Source: filename - Page X]."""
 
     prompt_template = ChatPromptTemplate.from_messages([
@@ -99,10 +131,6 @@ Always cite sources as [Source: filename - Page X]."""
 
     def format_docs(docs):
         return "\n\n---\n\n".join([f"Source: {d.metadata['source']} - Page {d.metadata.get('page', '?')}\n{d.page_content}" for d in docs])
-
-    base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 6})
-    compressor = FlashrankRerank(top_n=4)
-    compression_retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
 
     rag_chain = (
         {"context": compression_retriever | format_docs, "question": RunnablePassthrough()}
@@ -133,6 +161,7 @@ Always cite sources as [Source: filename - Page X]."""
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
 
+    # Download
     if st.button("📥 Download Chat as PDF"):
         if st.session_state.messages:
             pdf = FPDF()
@@ -152,4 +181,4 @@ Always cite sources as [Source: filename - Page X]."""
                 mime="application/pdf"
             )
 
-st.caption("Simple & Visible Upload Version")
+st.caption("Final Professional Version | All features included")
