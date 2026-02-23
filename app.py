@@ -3,6 +3,8 @@ import os
 import tempfile
 import shutil
 from datetime import datetime
+from dotenv import load_dotenv
+import json
 
 from langchain_community.document_loaders import PyMuPDFLoader
 from llama_parse import LlamaParse
@@ -17,7 +19,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.documents import Document
 from fpdf import FPDF
-import json
 
 st.set_page_config(page_title="PDF RAG Pro", layout="wide", page_icon="📄")
 
@@ -34,7 +35,7 @@ else:
     st.markdown("<style>.stApp {background-color: #0e1117; color: #ffffff;}</style>", unsafe_allow_html=True)
 
 st.title("📄 PDF RAG Pro - Near-Zero Hallucination")
-st.caption("FlashRank Reranker + LlamaParse + Tables + Dark Mode + Chat History")
+st.caption("FlashRank + LlamaParse + Tables + Dark Mode + History")
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 LLAMA_CLOUD_API_KEY = st.secrets.get("LLAMA_CLOUD_API_KEY")
@@ -44,7 +45,7 @@ if "vectorstore" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Visible Upload Section
+# Upload Section
 st.subheader("📤 Upload PDFs")
 uploaded_files = st.file_uploader("Drag & drop or browse PDFs (multiple allowed)", type=["pdf"], accept_multiple_files=True)
 
@@ -57,7 +58,6 @@ with col1:
             st.error("Upload at least one PDF")
             st.stop()
 
-        # Full safe reset
         if os.path.exists("./chroma_db"):
             shutil.rmtree("./chroma_db", ignore_errors=True)
         st.session_state.vectorstore = None
@@ -108,7 +108,7 @@ with col2:
             shutil.rmtree("./chroma_db", ignore_errors=True)
         st.session_state.vectorstore = None
         st.session_state.messages = []
-        st.success("All documents cleared")
+        st.success("Everything cleared")
 
 # Main Chat
 if st.session_state.vectorstore is None:
@@ -122,6 +122,7 @@ else:
 
     system_prompt = """Answer ONLY using the provided context. 
 If the question is about a table, extract and show the table in clean markdown format.
+If the answer is not in the context, reply exactly: "I don't have sufficient information in the provided documents."
 Always cite sources as [Source: filename - Page X]."""
 
     prompt_template = ChatPromptTemplate.from_messages([
@@ -161,7 +162,6 @@ Always cite sources as [Source: filename - Page X]."""
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
 
-    # Download
     if st.button("📥 Download Chat as PDF"):
         if st.session_state.messages:
             pdf = FPDF()
