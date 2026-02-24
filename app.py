@@ -5,7 +5,6 @@ import shutil
 from datetime import datetime
 from dotenv import load_dotenv
 import json
-import pandas as pd
 
 from langchain_community.document_loaders import PyMuPDFLoader
 from llama_parse import LlamaParse
@@ -23,7 +22,7 @@ from fpdf import FPDF
 
 st.set_page_config(page_title="PDF RAG Pro", layout="wide", page_icon="📄")
 
-# Theme
+# Theme Toggle
 if "theme" not in st.session_state:
     st.session_state.theme = "dark"
 
@@ -36,7 +35,7 @@ else:
     st.markdown("<style>.stApp {background-color: #0e1117; color: #ffffff;}</style>", unsafe_allow_html=True)
 
 st.title("📄 PDF RAG Pro - Near-Zero Hallucination")
-st.caption("PDF + Excel + Scanned + Tables | Final Professional Version")
+st.caption("Supports PDF + Excel + Images | Final Professional Version")
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 LLAMA_CLOUD_API_KEY = st.secrets.get("LLAMA_CLOUD_API_KEY")
@@ -47,10 +46,14 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # Upload Section (always visible)
-st.subheader("📤 Upload PDFs or Excel Files")
-uploaded_files = st.file_uploader("Drag & drop or browse (PDF or Excel)", type=["pdf", "xlsx", "xls"], accept_multiple_files=True)
+st.subheader("📤 Upload PDFs, Excel or Images")
+uploaded_files = st.file_uploader(
+    "Drag & drop or browse (PDF, Excel, JPG, PNG, JPEG)",
+    type=["pdf", "xlsx", "xls", "jpg", "jpeg", "png"],
+    accept_multiple_files=True
+)
 
-use_llamaparse = st.checkbox("Use LlamaParse (recommended for scanned PDFs, tables, medical reports)", value=True)
+use_llamaparse = st.checkbox("Use LlamaParse (recommended for scanned PDFs, images & tables)", value=True)
 
 col1, col2 = st.columns(2)
 with col1:
@@ -59,12 +62,13 @@ with col1:
             st.error("Upload at least one file")
             st.stop()
 
+        # Safe reset
         if os.path.exists("./chroma_db"):
             shutil.rmtree("./chroma_db", ignore_errors=True)
         st.session_state.vectorstore = None
         st.session_state.messages = []
 
-        with st.spinner("Processing files (optimized for tables & Excel)..."):
+        with st.spinner("Processing files (optimized for images & tables)..."):
             all_docs = []
             for uploaded_file in uploaded_files:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=uploaded_file.name) as tmp:
@@ -73,7 +77,18 @@ with col1:
 
                 ext = uploaded_file.name.lower().split('.')[-1]
 
-                if ext in ["xlsx", "xls"]:
+                if ext in ["jpg", "jpeg", "png"]:
+                    # For normal images
+                    loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
+                    docs = loader.load_data(tmp_path)
+                    for d in docs:
+                        doc = Document(
+                            page_content=d.text,
+                            metadata={"source": uploaded_file.name, "page": "Image"}
+                        )
+                        all_docs.append(doc)
+                elif ext in ["xlsx", "xls"]:
+                    import pandas as pd
                     df_dict = pd.read_excel(tmp_path, sheet_name=None)
                     for sheet_name, df in df_dict.items():
                         markdown = df.to_markdown(index=False)
@@ -86,7 +101,7 @@ with col1:
                     loader = LlamaParse(
                         api_key=LLAMA_CLOUD_API_KEY,
                         result_type="markdown",
-                        parsing_instruction="Extract all tables as clean markdown tables. Keep all numbers, headers, rows, and data exactly as in the original. Do not summarize tables. Preserve medical reports and image information accurately."
+                        parsing_instruction="Extract all tables and text accurately. Preserve structure of medical reports, images, and scanned content."
                     )
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
@@ -122,9 +137,9 @@ with col2:
         st.session_state.messages = []
         st.success("Everything cleared")
 
-# Main Chat
+# Main Chat Area
 if st.session_state.vectorstore is None:
-    st.info("👈 Upload PDFs or Excel files and click 'Process / Replace Index'")
+    st.info("👈 Upload PDFs, Excel or Images and click 'Process / Replace Index'")
 else:
     base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 8})
     compressor = FlashrankRerank(top_n=4)
@@ -133,7 +148,7 @@ else:
     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.0, api_key=GROQ_API_KEY)
 
     system_prompt = """Answer ONLY using the provided context. 
-If the question is about a table or Excel sheet, extract and show the table in clean markdown format.
+If the question is about a table or image, extract and describe it accurately.
 If the answer is not in the context, reply exactly: "I don't have sufficient information in the provided documents."
 Always cite sources as [Source: filename - Page X]."""
 
@@ -156,7 +171,7 @@ Always cite sources as [Source: filename - Page X]."""
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if question := st.chat_input("Ask anything about the PDFs or Excel files..."):
+    if question := st.chat_input("Ask anything about the uploaded files..."):
         st.session_state.messages.append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.markdown(question)
@@ -193,4 +208,4 @@ Always cite sources as [Source: filename - Page X]."""
                 mime="application/pdf"
             )
 
-st.caption("Final Professional Version | PDF + Excel + Scanned + Tables | All Features Included")
+st.caption("Final Professional Version | Supports PDF + Excel + Images")
