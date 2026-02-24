@@ -4,8 +4,8 @@ import tempfile
 import shutil
 from datetime import datetime
 from dotenv import load_dotenv
-import json
 import pandas as pd
+import json
 
 from langchain_community.document_loaders import PyMuPDFLoader
 from llama_parse import LlamaParse
@@ -86,7 +86,7 @@ with col1:
                 elif ext in ["xlsx", "xls"]:
                     df_dict = pd.read_excel(tmp_path, sheet_name=None)
                     for sheet_name, df in df_dict.items():
-                        markdown = df.to_markdown(index=False)
+                        markdown = df.to_string(index=False)
                         doc = Document(page_content=markdown, metadata={"source": uploaded_file.name, "page": f"Sheet: {sheet_name}"})
                         all_docs.append(doc)
                 elif use_llamaparse and LLAMA_CLOUD_API_KEY:
@@ -195,4 +195,4 @@ Always cite sources as [Source: filename - Page X]."""
                 mime="application/pdf"
             )
 
-st.caption("Final Professional Version | All Features Included")
+st.caption("Final Professional Version | PDF + Excel + Images Supported")
