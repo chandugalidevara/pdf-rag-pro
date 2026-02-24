@@ -9,3 +9,5 @@ sentence-transformers
 flashrank
 fpdf2
 llama-parse
+pandas
+openpyxl

@@ -5,6 +5,7 @@ import shutil
 from datetime import datetime
 from dotenv import load_dotenv
 import json
+import pandas as pd
 
 from langchain_community.document_loaders import PyMuPDFLoader
 from llama_parse import LlamaParse
@@ -35,7 +36,7 @@ else:
     st.markdown("<style>.stApp {background-color: #0e1117; color: #ffffff;}</style>", unsafe_allow_html=True)
 
 st.title("📄 PDF RAG Pro - Near-Zero Hallucination")
-st.caption("Supports PDF + Excel + Images | Final Professional Version")
+st.caption("PDF + Excel + Images | Final Professional Version")
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 LLAMA_CLOUD_API_KEY = st.secrets.get("LLAMA_CLOUD_API_KEY")
@@ -45,7 +46,7 @@ if "vectorstore" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Upload Section (always visible)
+# Upload Section
 st.subheader("📤 Upload PDFs, Excel or Images")
 uploaded_files = st.file_uploader(
     "Drag & drop or browse (PDF, Excel, JPG, PNG, JPEG)",
@@ -62,13 +63,12 @@ with col1:
             st.error("Upload at least one file")
             st.stop()
 
-        # Safe reset
         if os.path.exists("./chroma_db"):
             shutil.rmtree("./chroma_db", ignore_errors=True)
         st.session_state.vectorstore = None
         st.session_state.messages = []
 
-        with st.spinner("Processing files (optimized for images & tables)..."):
+        with st.spinner("Processing files..."):
             all_docs = []
             for uploaded_file in uploaded_files:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=uploaded_file.name) as tmp:
@@ -78,31 +78,19 @@ with col1:
                 ext = uploaded_file.name.lower().split('.')[-1]
 
                 if ext in ["jpg", "jpeg", "png"]:
-                    # For normal images
                     loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
-                    docs = loader.load_data(tmp_path)
-                    for d in docs:
-                        doc = Document(
-                            page_content=d.text,
-                            metadata={"source": uploaded_file.name, "page": "Image"}
-                        )
+                    llama_docs = loader.load_data(tmp_path)
+                    for d in llama_docs:
+                        doc = Document(page_content=d.text, metadata={"source": uploaded_file.name, "page": "Image"})
                         all_docs.append(doc)
                 elif ext in ["xlsx", "xls"]:
-                    import pandas as pd
                     df_dict = pd.read_excel(tmp_path, sheet_name=None)
                     for sheet_name, df in df_dict.items():
                         markdown = df.to_markdown(index=False)
-                        doc = Document(
-                            page_content=markdown,
-                            metadata={"source": uploaded_file.name, "page": f"Sheet: {sheet_name}"}
-                        )
+                        doc = Document(page_content=markdown, metadata={"source": uploaded_file.name, "page": f"Sheet: {sheet_name}"})
                         all_docs.append(doc)
                 elif use_llamaparse and LLAMA_CLOUD_API_KEY:
-                    loader = LlamaParse(
-                        api_key=LLAMA_CLOUD_API_KEY,
-                        result_type="markdown",
-                        parsing_instruction="Extract all tables and text accurately. Preserve structure of medical reports, images, and scanned content."
-                    )
+                    loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
                         text = d.text[:4500]
@@ -137,9 +125,9 @@ with col2:
         st.session_state.messages = []
         st.success("Everything cleared")
 
-# Main Chat Area
+# Main Chat
 if st.session_state.vectorstore is None:
-    st.info("👈 Upload PDFs, Excel or Images and click 'Process / Replace Index'")
+    st.info("👈 Upload files and click 'Process / Replace Index'")
 else:
     base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 8})
     compressor = FlashrankRerank(top_n=4)
@@ -149,7 +137,6 @@ else:
 
     system_prompt = """Answer ONLY using the provided context. 
 If the question is about a table or image, extract and describe it accurately.
-If the answer is not in the context, reply exactly: "I don't have sufficient information in the provided documents."
 Always cite sources as [Source: filename - Page X]."""
 
     prompt_template = ChatPromptTemplate.from_messages([
@@ -208,4 +195,4 @@ Always cite sources as [Source: filename - Page X]."""
                 mime="application/pdf"
             )
 
-st.caption("Final Professional Version | Supports PDF + Excel + Images")
+st.caption("Final Professional Version | All Features Included")
