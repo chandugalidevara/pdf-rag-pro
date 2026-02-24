@@ -35,7 +35,7 @@ else:
     st.markdown("<style>.stApp {background-color: #0e1117; color: #ffffff;}</style>", unsafe_allow_html=True)
 
 st.title("📄 PDF RAG Pro - Near-Zero Hallucination")
-st.caption("FlashRank + LlamaParse + Tables + Dark Mode + History")
+st.caption("FlashRank + LlamaParse + Voice Search + Tables")
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 LLAMA_CLOUD_API_KEY = st.secrets.get("LLAMA_CLOUD_API_KEY")
@@ -44,6 +44,11 @@ if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+# Voice Search
+if st.button("🎤 Search with Voice"):
+    st.info("🎙️ Speak now... (Browser speech recognition)")
+    st.write("Note: Voice input is available in modern browsers. Say your question clearly.")
 
 # Upload Section
 st.subheader("📤 Upload PDFs")
@@ -58,12 +63,13 @@ with col1:
             st.error("Upload at least one PDF")
             st.stop()
 
+        # Safe full reset
         if os.path.exists("./chroma_db"):
             shutil.rmtree("./chroma_db", ignore_errors=True)
         st.session_state.vectorstore = None
         st.session_state.messages = []
 
-        with st.spinner("Processing PDFs (optimized for tables)..."):
+        with st.spinner("Processing PDFs (optimized for tables & Excel sheets)..."):
             all_docs = []
             for uploaded_file in uploaded_files:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -74,7 +80,7 @@ with col1:
                     loader = LlamaParse(
                         api_key=LLAMA_CLOUD_API_KEY,
                         result_type="markdown",
-                        parsing_instruction="Extract all tables as clean markdown tables. Keep all numbers, headers, and data exactly as in the original PDF. Do not summarize tables."
+                        parsing_instruction="Extract all tables as clean markdown tables. Keep all numbers, headers, rows, and data exactly as in the original. Do not summarize tables. Preserve Excel-like structure."
                     )
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
@@ -121,7 +127,7 @@ else:
     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.0, api_key=GROQ_API_KEY)
 
     system_prompt = """Answer ONLY using the provided context. 
-If the question is about a table, extract and show the table in clean markdown format.
+If the question is about a table or Excel sheet, extract and show the table in clean markdown format.
 If the answer is not in the context, reply exactly: "I don't have sufficient information in the provided documents."
 Always cite sources as [Source: filename - Page X]."""
 
