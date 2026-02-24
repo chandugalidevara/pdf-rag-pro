@@ -5,6 +5,7 @@ import shutil
 from datetime import datetime
 from dotenv import load_dotenv
 import json
+import pandas as pd
 
 from langchain_community.document_loaders import PyMuPDFLoader
 from llama_parse import LlamaParse
@@ -35,7 +36,7 @@ else:
     st.markdown("<style>.stApp {background-color: #0e1117; color: #ffffff;}</style>", unsafe_allow_html=True)
 
 st.title("📄 PDF RAG Pro - Near-Zero Hallucination")
-st.caption("FlashRank + LlamaParse + Voice Search + Tables")
+st.caption("PDF + Excel + Scanned + Tables | Final Professional Version")
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 LLAMA_CLOUD_API_KEY = st.secrets.get("LLAMA_CLOUD_API_KEY")
@@ -45,42 +46,47 @@ if "vectorstore" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Voice Search
-if st.button("🎤 Search with Voice"):
-    st.info("🎙️ Speak now... (Browser speech recognition)")
-    st.write("Note: Voice input is available in modern browsers. Say your question clearly.")
+# Upload Section (always visible)
+st.subheader("📤 Upload PDFs or Excel Files")
+uploaded_files = st.file_uploader("Drag & drop or browse (PDF or Excel)", type=["pdf", "xlsx", "xls"], accept_multiple_files=True)
 
-# Upload Section
-st.subheader("📤 Upload PDFs")
-uploaded_files = st.file_uploader("Drag & drop or browse PDFs (multiple allowed)", type=["pdf"], accept_multiple_files=True)
-
-use_llamaparse = st.checkbox("Use LlamaParse (recommended for scanned PDFs & tables)", value=True)
+use_llamaparse = st.checkbox("Use LlamaParse (recommended for scanned PDFs, tables, medical reports)", value=True)
 
 col1, col2 = st.columns(2)
 with col1:
     if st.button("🚀 Process / Replace Index", type="primary"):
         if not uploaded_files:
-            st.error("Upload at least one PDF")
+            st.error("Upload at least one file")
             st.stop()
 
-        # Safe full reset
         if os.path.exists("./chroma_db"):
             shutil.rmtree("./chroma_db", ignore_errors=True)
         st.session_state.vectorstore = None
         st.session_state.messages = []
 
-        with st.spinner("Processing PDFs (optimized for tables & Excel sheets)..."):
+        with st.spinner("Processing files (optimized for tables & Excel)..."):
             all_docs = []
             for uploaded_file in uploaded_files:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=uploaded_file.name) as tmp:
                     tmp.write(uploaded_file.read())
                     tmp_path = tmp.name
 
-                if use_llamaparse and LLAMA_CLOUD_API_KEY:
+                ext = uploaded_file.name.lower().split('.')[-1]
+
+                if ext in ["xlsx", "xls"]:
+                    df_dict = pd.read_excel(tmp_path, sheet_name=None)
+                    for sheet_name, df in df_dict.items():
+                        markdown = df.to_markdown(index=False)
+                        doc = Document(
+                            page_content=markdown,
+                            metadata={"source": uploaded_file.name, "page": f"Sheet: {sheet_name}"}
+                        )
+                        all_docs.append(doc)
+                elif use_llamaparse and LLAMA_CLOUD_API_KEY:
                     loader = LlamaParse(
                         api_key=LLAMA_CLOUD_API_KEY,
                         result_type="markdown",
-                        parsing_instruction="Extract all tables as clean markdown tables. Keep all numbers, headers, rows, and data exactly as in the original. Do not summarize tables. Preserve Excel-like structure."
+                        parsing_instruction="Extract all tables as clean markdown tables. Keep all numbers, headers, rows, and data exactly as in the original. Do not summarize tables. Preserve medical reports and image information accurately."
                     )
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
@@ -106,7 +112,7 @@ with col1:
             st.session_state.vectorstore = Chroma.from_documents(
                 documents=splits, embedding=embeddings, persist_directory="./chroma_db"
             )
-            st.success(f"✅ {len(splits)} chunks indexed from {len(uploaded_files)} PDFs")
+            st.success(f"✅ {len(splits)} chunks indexed from {len(uploaded_files)} files")
 
 with col2:
     if st.button("🔄 Clear All Index"):
@@ -118,7 +124,7 @@ with col2:
 
 # Main Chat
 if st.session_state.vectorstore is None:
-    st.info("👈 Upload PDFs and click 'Process / Replace Index' to start")
+    st.info("👈 Upload PDFs or Excel files and click 'Process / Replace Index'")
 else:
     base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 8})
     compressor = FlashrankRerank(top_n=4)
@@ -150,7 +156,7 @@ Always cite sources as [Source: filename - Page X]."""
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if question := st.chat_input("Ask anything about the PDFs..."):
+    if question := st.chat_input("Ask anything about the PDFs or Excel files..."):
         st.session_state.messages.append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.markdown(question)
@@ -187,4 +193,4 @@ Always cite sources as [Source: filename - Page X]."""
                 mime="application/pdf"
             )
 
-st.caption("Final Professional Version | All features included")
+st.caption("Final Professional Version | PDF + Excel + Scanned + Tables | All Features Included")
