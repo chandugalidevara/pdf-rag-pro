@@ -81,7 +81,8 @@ with col1:
                     loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
-                        doc = Document(page_content=d.text, metadata={"source": uploaded_file.name, "page": "Image"})
+                        text = d.text[:3000]   # ← Safe limit for images
+                        doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": "Image"})
                         all_docs.append(doc)
                 elif ext in ["xlsx", "xls"]:
                     df_dict = pd.read_excel(tmp_path, sheet_name=None)
@@ -93,7 +94,7 @@ with col1:
                     loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
-                        text = d.text[:4500]
+                        text = d.text[:3000]   # ← Safe limit to prevent crash
                         page_num = d.metadata.get("page_label") or d.metadata.get("page") or 1
                         doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": page_num})
                         all_docs.append(doc)
@@ -107,7 +108,7 @@ with col1:
 
                 os.unlink(tmp_path)
 
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=100)
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=80)
             splits = text_splitter.split_documents(all_docs)
             splits = [s for s in splits if len(s.page_content.strip()) > 30]
 
