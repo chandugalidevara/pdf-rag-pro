@@ -63,7 +63,7 @@ with col1:
             st.error("Upload at least one file")
             st.stop()
 
-        # Safe full reset (fixes ChromaDB error after clear)
+        # Safe full reset
         if os.path.exists("./chroma_db"):
             shutil.rmtree("./chroma_db", ignore_errors=True)
         st.session_state.vectorstore = None
@@ -82,7 +82,7 @@ with col1:
                     loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
-                        text = d.text[:2800]   # Safe limit for images
+                        text = d.text[:2500]   # Safe limit for images
                         doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": "Image"})
                         all_docs.append(doc)
                 elif ext in ["xlsx", "xls"]:
@@ -95,7 +95,7 @@ with col1:
                     loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
-                        text = d.text[:2800]   # Safe limit for scanned PDFs
+                        text = d.text[:2500]   # Safe limit for scanned PDFs
                         page_num = d.metadata.get("page_label") or d.metadata.get("page") or 1
                         doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": page_num})
                         all_docs.append(doc)
