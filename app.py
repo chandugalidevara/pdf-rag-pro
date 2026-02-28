@@ -82,7 +82,7 @@ with col1:
                     loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
-                        text = d.text[:2500]   # Safe limit for images
+                        text = d.text[:2500]
                         doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": "Image"})
                         all_docs.append(doc)
                 elif ext in ["xlsx", "xls"]:
@@ -95,7 +95,7 @@ with col1:
                     loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
-                        text = d.text[:2500]   # Safe limit for scanned PDFs
+                        text = d.text[:2500]
                         page_num = d.metadata.get("page_label") or d.metadata.get("page") or 1
                         doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": page_num})
                         all_docs.append(doc)
@@ -114,8 +114,15 @@ with col1:
             splits = [s for s in splits if len(s.page_content.strip()) > 30]
 
             embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            
+            # Unique collection name to fix ChromaDB InternalError after clear
+            collection_name = f"pdf_rag_{int(datetime.now().timestamp())}"
+            
             st.session_state.vectorstore = Chroma.from_documents(
-                documents=splits, embedding=embeddings, persist_directory="./chroma_db"
+                documents=splits,
+                embedding=embeddings,
+                persist_directory="./chroma_db",
+                collection_name=collection_name
             )
             st.success(f"✅ {len(splits)} chunks indexed from {len(uploaded_files)} files")
 
