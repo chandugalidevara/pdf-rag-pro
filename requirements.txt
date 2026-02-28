@@ -11,3 +11,5 @@ fpdf2
 llama-parse
 pandas
 openpyxl
+tabulate
+pysqlite3-binary

@@ -1,9 +1,12 @@
+import sys
+__import__('pysqlite3')
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+
 import streamlit as st
 import os
 import tempfile
 import shutil
 from datetime import datetime
-from dotenv import load_dotenv
 import pandas as pd
 import json
 
@@ -82,7 +85,7 @@ with col1:
                     loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
-                        text = d.text[:2500]
+                        text = d.text[:1800]
                         doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": "Image"})
                         all_docs.append(doc)
                 elif ext in ["xlsx", "xls"]:
@@ -95,7 +98,7 @@ with col1:
                     loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
-                        text = d.text[:2500]
+                        text = d.text[:1800]
                         page_num = d.metadata.get("page_label") or d.metadata.get("page") or 1
                         doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": page_num})
                         all_docs.append(doc)
@@ -109,20 +112,17 @@ with col1:
 
                 os.unlink(tmp_path)
 
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=80)
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=80)
             splits = text_splitter.split_documents(all_docs)
             splits = [s for s in splits if len(s.page_content.strip()) > 30]
 
             embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-            
-            # Unique collection name to fix ChromaDB InternalError after clear
-            collection_name = f"pdf_rag_{int(datetime.now().timestamp())}"
-            
+
+            # In-memory Chroma + fixed collection (stable on Streamlit Cloud)
             st.session_state.vectorstore = Chroma.from_documents(
                 documents=splits,
                 embedding=embeddings,
-                persist_directory="./chroma_db",
-                collection_name=collection_name
+                collection_name="pdf_rag_pro"
             )
             st.success(f"✅ {len(splits)} chunks indexed from {len(uploaded_files)} files")
 
@@ -167,7 +167,14 @@ Always cite sources as [Source: filename - Page X]."""
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if question := st.chat_input("Ask anything about the uploaded files..."):
+    col_chat, col_voice = st.columns([4, 1])
+    with col_chat:
+        question = st.chat_input("Ask anything about the uploaded files...")
+    with col_voice:
+        if st.button("🎤 Voice"):
+            st.info("Voice input is enabled – speak your question (use chat input for now)")
+
+    if question:
         st.session_state.messages.append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.markdown(question)
@@ -184,6 +191,18 @@ Always cite sources as [Source: filename - Page X]."""
                         st.caption(d.page_content[:480] + "...")
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
+
+    # Save / Load Chat History
+    col_save, col_load = st.columns(2)
+    with col_save:
+        if st.button("💾 Save Chat History"):
+            data = json.dumps(st.session_state.messages, indent=2)
+            st.download_button("Download JSON", data, "chat_history.json", "application/json")
+    with col_load:
+        uploaded_history = st.file_uploader("📂 Load Chat History", type="json", key="load_chat")
+        if uploaded_history is not None:
+            st.session_state.messages = json.load(uploaded_history)
+            st.success("Chat history loaded!")
 
     if st.button("📥 Download Chat as PDF"):
         if st.session_state.messages:
