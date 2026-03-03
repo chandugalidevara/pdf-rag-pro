@@ -8,7 +8,6 @@ import tempfile
 import shutil
 from datetime import datetime
 import pandas as pd
-import json
 
 from langchain_community.document_loaders import PyMuPDFLoader
 from llama_parse import LlamaParse
@@ -66,7 +65,6 @@ with col1:
             st.error("Upload at least one file")
             st.stop()
 
-        # Safe full reset
         if os.path.exists("./chroma_db"):
             shutil.rmtree("./chroma_db", ignore_errors=True)
         st.session_state.vectorstore = None
@@ -85,7 +83,7 @@ with col1:
                     loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
-                        text = d.text[:1800]
+                        text = d.text[:3800]
                         doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": "Image"})
                         all_docs.append(doc)
                 elif ext in ["xlsx", "xls"]:
@@ -95,10 +93,14 @@ with col1:
                         doc = Document(page_content=markdown, metadata={"source": uploaded_file.name, "page": f"Sheet: {sheet_name}"})
                         all_docs.append(doc)
                 elif use_llamaparse and LLAMA_CLOUD_API_KEY:
-                    loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
+                    loader = LlamaParse(
+                        api_key=LLAMA_CLOUD_API_KEY,
+                        result_type="markdown",
+                        parsing_instruction="Extract all text, tables and numbers accurately. Preserve exact structure, rows, columns and values from tables and scanned pages."
+                    )
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
-                        text = d.text[:1800]
+                        text = d.text[:3800]
                         page_num = d.metadata.get("page_label") or d.metadata.get("page") or 1
                         doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": page_num})
                         all_docs.append(doc)
@@ -112,17 +114,16 @@ with col1:
 
                 os.unlink(tmp_path)
 
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=80)
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=120)
             splits = text_splitter.split_documents(all_docs)
             splits = [s for s in splits if len(s.page_content.strip()) > 30]
 
             embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-            # In-memory Chroma + fixed collection (stable on Streamlit Cloud)
             st.session_state.vectorstore = Chroma.from_documents(
                 documents=splits,
                 embedding=embeddings,
-                collection_name="pdf_rag_pro"
+                collection_name="pdf_rag_pro_final"
             )
             st.success(f"✅ {len(splits)} chunks indexed from {len(uploaded_files)} files")
 
@@ -138,15 +139,17 @@ with col2:
 if st.session_state.vectorstore is None:
     st.info("👈 Upload files and click 'Process / Replace Index'")
 else:
-    base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 8})
-    compressor = FlashrankRerank(top_n=4)
+    base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 10})
+    compressor = FlashrankRerank(top_n=5)
     compression_retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
 
     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.0, api_key=GROQ_API_KEY)
 
-    system_prompt = """Answer ONLY using the provided context. 
-If the question is about a table or image, extract and describe it accurately.
-Always cite sources as [Source: filename - Page X]."""
+    system_prompt = """You are a precise assistant. Answer ONLY from the provided context. 
+Never guess or add information. 
+If the answer is in the context, give it clearly and then add the exact citation.
+If not found, say exactly: "I don't have sufficient information in the provided documents."
+Always end with the citation in this exact format: [Source: filename - Page X]"""
 
     prompt_template = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
@@ -154,7 +157,12 @@ Always cite sources as [Source: filename - Page X]."""
     ])
 
     def format_docs(docs):
-        return "\n\n---\n\n".join([f"Source: {d.metadata['source']} - Page {d.metadata.get('page', '?')}\n{d.page_content}" for d in docs])
+        formatted = []
+        for d in docs:
+            source = d.metadata.get('source', 'Unknown')
+            page = d.metadata.get('page', '?')
+            formatted.append(f"Source: {source} - Page {page}\n{d.page_content}")
+        return "\n\n---\n\n".join(formatted)
 
     rag_chain = (
         {"context": compression_retriever | format_docs, "question": RunnablePassthrough()}
@@ -187,22 +195,12 @@ Always cite sources as [Source: filename - Page X]."""
                 with st.expander("📚 Sources & Citations", expanded=True):
                     retrieved = compression_retriever.invoke(question)
                     for i, d in enumerate(retrieved):
-                        st.markdown(f"**[{i+1}] {d.metadata.get('source', 'Unknown')} - Page {d.metadata.get('page', '?')}**")
-                        st.caption(d.page_content[:480] + "...")
+                        source = d.metadata.get('source', 'Unknown')
+                        page = d.metadata.get('page', '?')
+                        st.markdown(f"**[{i+1}] {source} - Page {page}**")
+                        st.caption(d.page_content[:500] + "...")
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
-
-    # Save / Load Chat History
-    col_save, col_load = st.columns(2)
-    with col_save:
-        if st.button("💾 Save Chat History"):
-            data = json.dumps(st.session_state.messages, indent=2)
-            st.download_button("Download JSON", data, "chat_history.json", "application/json")
-    with col_load:
-        uploaded_history = st.file_uploader("📂 Load Chat History", type="json", key="load_chat")
-        if uploaded_history is not None:
-            st.session_state.messages = json.load(uploaded_history)
-            st.success("Chat history loaded!")
 
     if st.button("📥 Download Chat as PDF"):
         if st.session_state.messages:
