@@ -1,12 +1,9 @@
-import sys
-__import__('pysqlite3')
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-
 import streamlit as st
 import os
 import tempfile
 import shutil
 from datetime import datetime
+from dotenv import load_dotenv
 import pandas as pd
 
 from langchain_community.document_loaders import PyMuPDFLoader
@@ -84,7 +81,8 @@ with col1:
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
                         text = d.text[:3800]
-                        doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": "Image"})
+                        page_num = d.metadata.get("page_label") or d.metadata.get("page") or "Image"
+                        doc = Document(page_content=text, metadata={"source": uploaded_file.name, "page": page_num})
                         all_docs.append(doc)
                 elif ext in ["xlsx", "xls"]:
                     df_dict = pd.read_excel(tmp_path, sheet_name=None)
@@ -93,11 +91,7 @@ with col1:
                         doc = Document(page_content=markdown, metadata={"source": uploaded_file.name, "page": f"Sheet: {sheet_name}"})
                         all_docs.append(doc)
                 elif use_llamaparse and LLAMA_CLOUD_API_KEY:
-                    loader = LlamaParse(
-                        api_key=LLAMA_CLOUD_API_KEY,
-                        result_type="markdown",
-                        parsing_instruction="Extract all text, tables and numbers accurately. Preserve exact structure, rows, columns and values from tables and scanned pages."
-                    )
+                    loader = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown")
                     llama_docs = loader.load_data(tmp_path)
                     for d in llama_docs:
                         text = d.text[:3800]
@@ -139,8 +133,8 @@ with col2:
 if st.session_state.vectorstore is None:
     st.info("👈 Upload files and click 'Process / Replace Index'")
 else:
-    base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 10})
-    compressor = FlashrankRerank(top_n=5)
+    base_retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 12})
+    compressor = FlashrankRerank(top_n=6)
     compression_retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
 
     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.0, api_key=GROQ_API_KEY)
@@ -149,7 +143,7 @@ else:
 Never guess or add information. 
 If the answer is in the context, give it clearly and then add the exact citation.
 If not found, say exactly: "I don't have sufficient information in the provided documents."
-Always end with the citation in this exact format: [Source: filename - Page X]"""
+Always end with the exact citation in this format: [Source: filename - Page X]"""
 
     prompt_template = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
@@ -157,12 +151,7 @@ Always end with the citation in this exact format: [Source: filename - Page X]""
     ])
 
     def format_docs(docs):
-        formatted = []
-        for d in docs:
-            source = d.metadata.get('source', 'Unknown')
-            page = d.metadata.get('page', '?')
-            formatted.append(f"Source: {source} - Page {page}\n{d.page_content}")
-        return "\n\n---\n\n".join(formatted)
+        return "\n\n---\n\n".join([f"Source: {d.metadata.get('source', 'Unknown')} - Page {d.metadata.get('page', '?')}\n{d.page_content}" for d in docs])
 
     rag_chain = (
         {"context": compression_retriever | format_docs, "question": RunnablePassthrough()}
@@ -175,14 +164,7 @@ Always end with the citation in this exact format: [Source: filename - Page X]""
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    col_chat, col_voice = st.columns([4, 1])
-    with col_chat:
-        question = st.chat_input("Ask anything about the uploaded files...")
-    with col_voice:
-        if st.button("🎤 Voice"):
-            st.info("Voice input is enabled – speak your question (use chat input for now)")
-
-    if question:
+    if question := st.chat_input("Ask anything about the uploaded files..."):
         st.session_state.messages.append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.markdown(question)
@@ -194,11 +176,16 @@ Always end with the citation in this exact format: [Source: filename - Page X]""
 
                 with st.expander("📚 Sources & Citations", expanded=True):
                     retrieved = compression_retriever.invoke(question)
+                    pages = set()
                     for i, d in enumerate(retrieved):
                         source = d.metadata.get('source', 'Unknown')
                         page = d.metadata.get('page', '?')
-                        st.markdown(f"**[{i+1}] {source} - Page {page}**")
+                        pages.add(page)
+                        st.markdown(f"**[{i+1}] Source: {source} - Page {page}**")
                         st.caption(d.page_content[:500] + "...")
+
+                    if len(pages) > 1:
+                        st.caption("**Note:** Answer spans multiple pages: " + ", ".join(map(str, pages)))
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
 
